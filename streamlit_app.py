@@ -3,142 +3,97 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 
-def get_user_inputs():
-    print("\n--- ⚙️ PORTFOLIO CONFIGURATION ⚙️ ---")
-    
-    # 1. Tickers
-    default_tickers = "RELIANCE.NS, INFY.NS, TCS.NS, GOLDBEES.NS"
-    ticker_str = input(f"Enter Tickers (comma separated) [Default: {default_tickers}]: ").strip()
-    if not ticker_str:
-        tickers = [t.strip() for t in default_tickers.split(',')]
-    else:
-        tickers = [t.strip() for t in ticker_str.split(',')]
-        
-    # 2. Weights
-    print(f"Detected {len(tickers)} assets.")
-    default_weights = "0.4, 0.2, 0.2, 0.2"
-    weight_str = input(f"Enter Weights (comma separated) [Default: {default_weights}]: ").strip()
-    if not weight_str:
-        weights = np.array([float(w) for w in default_weights.split(',')])
-    else:
-        weights = np.array([float(w) for w in weight_str.split(',')])
-    
-    # Validation
-    if len(tickers) != len(weights):
-        raise ValueError(f"Mismatch: You entered {len(tickers)} tickers but {len(weights)} weights.")
-    weights /= np.sum(weights) # Normalize to 1.0
+# ==========================================================
+# --- ⚙️ CONFIGURATION BLOCK (Edit your settings here) ---
+# ==========================================================
+TICKERS = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'GOLDBEES.NS']
+WEIGHTS = np.array([0.40, 0.20, 0.20, 0.20])
+YEARS = 1
+SIMULATIONS = 10000        # High number for better accuracy
+INITIAL_INVESTMENT = 100000 
+# ==========================================================
 
-    # 3. Simulation Params
-    try:
-        years = float(input("Enter Simulation Years [Default: 1]: ") or 1)
-        sims = int(input("Enter # of Simulations [Default: 5000]: ") or 5000)
-        investment = float(input("Enter Initial Investment (₹) [Default: 100000]: ") or 100000)
-    except ValueError:
-        print("Invalid number entered. Using defaults.")
-        years, sims, investment = 1, 5000, 100000
-
-    return tickers, weights, years, sims, investment
-
-# --- MAIN EXECUTION ---
-try:
-    tickers, weights, years, simulations, investment = get_user_inputs()
+def run_simulation():
+    # 1. Setup & Data Fetching
+    print(f"Fetching data for: {TICKERS}...")
+    data = yf.download(TICKERS, period="3y", auto_adjust=True)['Close']
     
-    print(f"\nFetching data for: {tickers}...")
-    # Fetch data (Auto-adjust handles splits/dividends)
-    data = yf.download(tickers, period="3y", auto_adjust=True)['Close']
-    
-    # Handle single ticker edge case or missing data
-    if len(tickers) == 1:
+    # Handle single ticker edge cases
+    if len(TICKERS) == 1:
         data = data.to_frame()
-        data.columns = tickers
-    
+        data.columns = TICKERS
+        
     data = data.ffill().dropna()
     
-    if data.empty:
-        raise ValueError("No data fetched. Check ticker spelling.")
-
-    # --- STATISTICS ---
+    # 2. Statistics & Correlation
     log_returns = np.log(1 + data.pct_change()).dropna()
     mean_daily = log_returns.mean().to_numpy()
     std_daily = log_returns.std().to_numpy()
     corr_matrix = log_returns.corr().to_numpy()
     
-    # Cholesky Decomposition (for correlation)
+    # Cholesky Decomposition for correlated assets
     L = np.linalg.cholesky(corr_matrix)
 
-    # --- VECTORIZED SIMULATION (The Fast Part) ---
-    print(f"🚀 Running {simulations} simulations for {years} years...")
+    # 3. Vectorized Simulation Engine
+    print(f"🚀 Simulating {SIMULATIONS} paths...")
+    days = int(252 * YEARS)
+    num_assets = len(TICKERS)
     
-    days = int(252 * years)
-    num_assets = len(tickers)
-    
-    # 1. Generate uncorrelated random shocks for ALL simulations at once
+    # Generate Correlated Shocks
     # Shape: (Simulations, Days, Assets)
-    uncorr_shocks = np.random.normal(0, 1, (simulations, days, num_assets))
-    
-    # 2. Apply Correlation (Einstein Summation for speed)
-    # This multiplies the Cholesky matrix 'L' with the random shocks
+    uncorr_shocks = np.random.normal(0, 1, (SIMULATIONS, days, num_assets))
     corr_shocks = np.einsum('ij, mdj -> mdi', L, uncorr_shocks)
     
-    # 3. Calculate Cumulative Returns (Geometric Brownian Motion)
-    # Formula: P_t = P_0 * exp( cumsum( drift + sigma * Z ) )
+    # Calculate Price Paths using Geometric Brownian Motion
     drift = mean_daily - 0.5 * std_daily**2
+    daily_returns = np.exp(drift + std_daily * corr_shocks)
     
-    # Broadcast drift and std to match shock shape
-    daily_log_returns = drift + std_daily * corr_shocks
-    cumulative_returns = np.exp(np.cumsum(daily_log_returns, axis=1))
+    # Accumulate returns over time
+    path_multipliers = np.cumprod(daily_returns, axis=1)
     
-    # 4. Apply to Starting Prices
+    # Apply to starting prices
     current_prices = data.iloc[-1].to_numpy()
-    # Add a starting row of 1.0 (or actual prices) for t=0
-    # Shape: (Simulations, Days, Assets)
-    price_paths = current_prices * cumulative_returns
+    price_paths = current_prices * path_multipliers
     
-    # 5. Calculate Portfolio Value
-    # Shares purchased at t=0
-    shares = (investment * weights) / current_prices
-    
-    # Portfolio Value = Sum (Price_asset * Shares_asset) across assets
-    # Shape: (Simulations, Days)
+    # 4. Portfolio Value Calculation
+    shares = (INITIAL_INVESTMENT * WEIGHTS) / current_prices
     portfolio_values = np.dot(price_paths, shares)
     
-    # --- RESULTS & METRICS ---
-    final_values = portfolio_values[:, -1]
-    expected_val = np.mean(final_values)
-    median_val = np.median(final_values)
-    var_95 = np.percentile(final_values, 5)  # 5th percentile (95% confidence)
-    cvar_95 = final_values[final_values <= var_95].mean() # Conditional VaR
+    # 5. Metrics
+    final_vals = portfolio_values[:, -1]
+    expected_val = np.mean(final_vals)
+    var_95 = np.percentile(final_vals, 5)
+    cvar_95 = final_vals[final_vals <= var_95].mean()
 
-    print("\n--- 📊 SIMULATION RESULTS ---")
-    print(f"Initial Investment:  ₹{investment:,.2f}")
-    print(f"Expected Value:      ₹{expected_val:,.2f} (Mean)")
-    print(f"Median Outcome:      ₹{median_val:,.2f} (More robust than mean)")
-    print(f"VaR (95% Risk):      ₹{var_95:,.2f} (Worst case in 95% of times)")
-    print(f"CVaR (Tail Risk):    ₹{cvar_95:,.2f} (Avg loss in worst 5% scenarios)")
+    # 6. Output & Visualization
+    print("\n" + "="*30)
+    print(f"EXPECTED VALUE: ₹{expected_val:,.2f}")
+    print(f"VALUE AT RISK (95%): ₹{var_95:,.2f}")
+    print(f"CONDITIONAL VaR: ₹{cvar_95:,.2f}")
+    print("="*30)
 
-    # --- VISUALIZATION ---
-    plt.figure(figsize=(14, 6))
+    # Visualizing the distribution of outcomes
     
-    # Plot 1: 100 Sample Paths
-    plt.subplot(1, 2, 1)
-    plt.plot(portfolio_values[:100, :].T, alpha=0.3, linewidth=1)
-    plt.title(f"Simulation Paths (First 100 of {simulations})")
-    plt.ylabel("Portfolio Value (₹)")
-    plt.xlabel("Trading Days")
-    plt.grid(alpha=0.3)
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Plot 1: The Simulation "Fan"
+    ax1.plot(portfolio_values[:150, :].T, alpha=0.15, color='royalblue')
+    ax1.set_title(f"Monte Carlo Paths ({YEARS} Year Forecast)")
+    ax1.set_ylabel("Portfolio Value (₹)")
+    ax1.grid(True, alpha=0.2)
     
     # Plot 2: Final Distribution
-    plt.subplot(1, 2, 2)
-    plt.hist(final_values, bins=50, color='skyblue', edgecolor='black', alpha=0.7)
-    plt.axvline(var_95, color='red', linestyle='--', linewidth=2, label=f'95% VaR: ₹{var_95/1000:.0f}k')
-    plt.axvline(expected_val, color='green', linestyle='-', linewidth=2, label=f'Mean: ₹{expected_val/1000:.0f}k')
-    plt.axvline(investment, color='black', linestyle=':', linewidth=2, label='Initial')
-    plt.title("Final Portfolio Value Distribution")
-    plt.xlabel("Value (₹)")
-    plt.legend()
+    ax2.hist(final_vals, bins=60, color='teal', alpha=0.7, edgecolor='white')
+    ax2.axvline(var_95, color='red', linestyle='--', label=f'95% VaR: ₹{var_95:,.0f}')
+    ax2.axvline(expected_val, color='gold', linewidth=2, label=f'Expected: ₹{expected_val:,.0f}')
+    ax2.set_title("Distribution of Final Outcomes")
+    ax2.set_xlabel("Final Value (₹)")
+    ax2.legend()
     
     plt.tight_layout()
     plt.show()
 
-except Exception as e:
-    print(f"\n❌ Error: {e}")
+if __name__ == "__main__":
+    run_simulation()
+    
