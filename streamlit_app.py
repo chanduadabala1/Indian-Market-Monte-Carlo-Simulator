@@ -109,7 +109,6 @@ if st.sidebar.button("Run Simulation", type="primary"):
                     ax.set_ylabel("Value (₹)")
                     st.pyplot(fig)
                 with tab2:
-                    with tab2:
                     fig2, ax2 = plt.subplots(figsize=(10, 5))
                     # Histogram of final outcomes
                     ax2.hist(final_vals, bins=50, color='teal', alpha=0.7, edgecolor='white')
