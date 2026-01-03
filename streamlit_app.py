@@ -109,10 +109,25 @@ if st.sidebar.button("Run Simulation", type="primary"):
                     ax.set_ylabel("Value (₹)")
                     st.pyplot(fig)
                 with tab2:
+                    with tab2:
                     fig2, ax2 = plt.subplots(figsize=(10, 5))
-                    ax2.hist(final_vals, bins=50, color='teal', alpha=0.7)
-                    ax2.set_xlabel("Value (₹)")
+                    # Histogram of final outcomes
+                    ax2.hist(final_vals, bins=50, color='teal', alpha=0.7, edgecolor='white')
+                    
+                    # --- ADDING VaR LINE ---
+                    ax2.axvline(var_95, color='red', linestyle='--', linewidth=2, label=f"VaR 95%: ₹{var_95:,.0f}")
+                    
+                    # Adding an arrow or annotation for clarity
+                    ax2.annotate('95% Confidence Loss Threshold', 
+                                 xy=(var_95, 0), xytext=(var_95*0.8, 10),
+                                 arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5),
+                                 horizontalalignment='right')
+                    
+                    ax2.axvline(initial_investment, color='black', linewidth=1, label="Initial Investment")
+                    ax2.set_title("Distribution of Final Outcomes & Risk Threshold")
+                    ax2.set_xlabel("Final Portfolio Value (₹)")
+                    ax2.set_ylabel("Frequency")
+                    ax2.legend()
                     st.pyplot(fig2)
-
             except Exception as e:
                 st.error(f"Error: {e}")
